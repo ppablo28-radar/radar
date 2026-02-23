@@ -9,9 +9,18 @@ const REFRESH_MINUTES = 15;
 const parseCSV = (text) => {
   const lines = text.trim().split("\n");
   if (lines.length < 2) return [];
-  const headers = lines[0].split(",").map(h => h.trim().toLowerCase().replace(/"/g, ""));
+  
+  // Limpiar BOM si existe
+  const firstLine = lines[0].replace(/^\uFEFF/, "");
+  const headers = firstLine.split(",").map(h => h.trim().toLowerCase().replace(/"/g, ""));
+  
+  console.log("Headers encontrados:", headers);
 
-  return lines.slice(1).map(line => {
+  const results = [];
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim()) continue;
+
     const cols = [];
     let cur = "", inQ = false;
     for (let ch of line) {
@@ -22,12 +31,12 @@ const parseCSV = (text) => {
     cols.push(cur.trim());
 
     const get = (kw) => {
-      const i = headers.findIndex(h => h.includes(kw));
-      return i >= 0 ? (cols[i] || "").trim().replace(/"/g, "") : "";
+      const idx = headers.findIndex(h => h.includes(kw));
+      return idx >= 0 ? (cols[idx] || "").trim().replace(/"/g, "") : "";
     };
 
     const ticker = get("ticker").toUpperCase();
-    if (!ticker || ticker === "#N/A" || ticker === "") return null;
+    if (!ticker || ticker === "#N/A" || ticker === "") continue;
 
     const nivelCompra = get("nivel compra");
     const nivelVenta  = get("nivel venta");
@@ -45,14 +54,14 @@ const parseCSV = (text) => {
     else if (v.includes("N2") || v.includes("N1") || v.includes("POSIBLE")) actionType = "SELL_SOFT";
     else if (c.startsWith("NIVEL"))                                          actionType = "BUY";
 
-    const rawQCo    = get("calidad empresa");
-    const qualityCo = (!rawQCo || rawQCo === "No encontrado" || rawQCo === "#N/A") ? "" : rawQCo;
+    const rawQCo     = get("calidad empresa");
+    const qualityCo  = (!rawQCo || rawQCo === "No encontrado" || rawQCo === "#N/A") ? "" : rawQCo;
     const qualityDiv = parseFloat(get("calidad dividendo")) || 0;
     const divGro     = parseFloat(get("divgro")) || 0;
 
-    return {
+    results.push({
       ticker,
-      name: get("nombre"),
+      name:        get("nombre"),
       pais,
       precioArs:   parseFloat(get("precio ars"))       || 0,
       precioUsd:   parseFloat(get("precio usd"))       || 0,
@@ -66,8 +75,11 @@ const parseCSV = (text) => {
       divGro,
       qualityCo,
       qualityDiv,
-    };
-  }).filter(Boolean);
+    });
+  }
+
+  console.log(`Parseados ${results.length} activos:`, results.slice(0, 3));
+  return results;
 };
 
 // ─── Escala niveles ──────────────────────────────────────────
@@ -160,7 +172,6 @@ function Metric({ label, value, color }) {
   );
 }
 
-// ─── FilterDropdown con cierre correcto ──────────────────────
 function FilterDropdown({ label, options, selected, onChange, color = "#64748b" }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
@@ -194,16 +205,16 @@ function FilterDropdown({ label, options, selected, onChange, color = "#64748b" 
           padding: "6px", minWidth: 190, boxShadow: "0 8px 32px #000c",
         }}>
           {options.length === 0 && (
-            <div style={{ padding: "8px 10px", color: "#334155", fontSize: 11 }}>Sin opciones disponibles</div>
+            <div style={{ padding: "8px 10px", color: "#334155", fontSize: 11 }}>Cargando opciones...</div>
           )}
           {options.map(opt => {
             const isOn = selected.includes(opt.value);
             return (
               <div key={opt.value}
-                onClick={() => onChange(isOn ? selected.filter(x => x !== opt.value) : [...selected, opt.value])}
+                onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); onChange(isOn ? selected.filter(x => x !== opt.value) : [...selected, opt.value]); }}
                 style={{
                   display: "flex", alignItems: "center", gap: 8,
-                  padding: "7px 10px", borderRadius: 5, cursor: "pointer",
+                  padding: "8px 10px", borderRadius: 5, cursor: "pointer",
                   background: isOn ? color + "22" : "transparent",
                   color: isOn ? color : "#94a3b8", fontSize: 12,
                   userSelect: "none",
@@ -221,7 +232,7 @@ function FilterDropdown({ label, options, selected, onChange, color = "#64748b" 
             );
           })}
           {selected.length > 0 && (
-            <div onClick={() => onChange([])}
+            <div onMouseDown={(e) => { e.preventDefault(); onChange([]); }}
               style={{ padding: "6px 10px", marginTop: 4, borderTop: "1px solid #1e293b", cursor: "pointer", color: "#ef4444", fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
               <X size={11} /> Limpiar filtro
             </div>
@@ -233,24 +244,26 @@ function FilterDropdown({ label, options, selected, onChange, color = "#64748b" 
 }
 
 const SORT_OPTIONS = [
-  { value: "ticker",      label: "Ticker A-Z"     },
-  { value: "precioArs",   label: "Precio ARS"     },
-  { value: "yld",         label: "Yield"           },
-  { value: "salesGrowth", label: "Crec. Ventas"   },
-  { value: "divGrowth",   label: "Crec. Div"      },
-  { value: "divGro",      label: "DivGro"         },
-  { value: "qualityDiv",  label: "Score Div"      },
+  { value: "ticker",      label: "Ticker A-Z"   },
+  { value: "precioArs",   label: "Precio ARS"   },
+  { value: "yld",         label: "Yield"         },
+  { value: "salesGrowth", label: "Crec. Ventas" },
+  { value: "divGrowth",   label: "Crec. Div"    },
+  { value: "divGro",      label: "DivGro"       },
+  { value: "qualityDiv",  label: "Score Div"    },
 ];
 
-// ─── App ─────────────────────────────────────────────────────
 export default function App() {
   const [data, setData]             = useState([]);
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState(false);
+  const [errorMsg, setErrorMsg]     = useState("");
   const [lastUpdate, setLastUpdate] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [debug, setDebug]           = useState(false);
+  const [rawDebug, setRawDebug]     = useState("");
 
-  const [search, setSearch]           = useState("");
+  const [search, setSearch]             = useState("");
   const [filterAccion, setFilterAccion] = useState([]);
   const [filterPais, setFilterPais]     = useState([]);
   const [filterQCo, setFilterQCo]       = useState([]);
@@ -261,15 +274,22 @@ export default function App() {
   const fetchData = async (manual = false) => {
     if (manual) setRefreshing(true);
     try {
-      const res = await fetch(SHEET_URL + "&t=" + Date.now());
-      if (!res.ok) throw new Error("HTTP " + res.status);
+      const res = await fetch(SHEET_URL + "&t=" + Date.now(), { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const text = await res.text();
-      setData(parseCSV(text));
+      setRawDebug(text.slice(0, 500)); // primeros 500 chars para debug
+      const parsed = parseCSV(text);
+      if (parsed.length === 0) {
+        setErrorMsg("CSV parseado pero sin datos válidos. Verificá el formato del Sheet.");
+      }
+      setData(parsed);
       setLastUpdate(new Date());
       setError(false);
+      setErrorMsg("");
     } catch (e) {
-      console.error(e);
+      console.error("fetchData error:", e);
       setError(true);
+      setErrorMsg(e.message);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -282,7 +302,6 @@ export default function App() {
     return () => clearInterval(iv);
   }, []);
 
-  // Opciones dinámicas
   const paisOptions = useMemo(() =>
     [...new Set(data.map(d => d.pais).filter(Boolean))].sort().map(p => ({ value: p, label: p }))
   , [data]);
@@ -291,18 +310,8 @@ export default function App() {
     [...new Set(data.map(d => d.qualityCo).filter(Boolean))].sort().map(q => ({ value: q, label: q }))
   , [data]);
 
-  const qDivRanges = [
-    { value: "90-100", label: "90 – 100" },
-    { value: "70-89",  label: "70 – 89"  },
-    { value: "50-69",  label: "50 – 69"  },
-    { value: "<50",    label: "< 50"     },
-  ];
-  const divGroRanges = [
-    { value: ">15",   label: "> 15%"    },
-    { value: "10-15", label: "10 – 15%" },
-    { value: "5-9",   label: "5 – 9%"   },
-    { value: "<5",    label: "< 5%"     },
-  ];
+  const qDivRanges  = [{ value: "90-100", label: "90–100" }, { value: "70-89", label: "70–89" }, { value: "50-69", label: "50–69" }, { value: "<50", label: "< 50" }];
+  const divGroRanges = [{ value: ">15", label: "> 15%" }, { value: "10-15", label: "10–15%" }, { value: "5-9", label: "5–9%" }, { value: "<5", label: "< 5%" }];
 
   const inQDivRange = (val, ranges) => ranges.some(r => {
     if (r === "90-100") return val >= 90;
@@ -311,7 +320,6 @@ export default function App() {
     if (r === "<50")    return val > 0 && val < 50;
     return false;
   });
-
   const inDivGroRange = (val, ranges) => ranges.some(r => {
     if (r === ">15")   return val > 15;
     if (r === "10-15") return val >= 10 && val <= 15;
@@ -331,24 +339,26 @@ export default function App() {
     });
   };
 
-  // ── FILTRADO Y ORDEN — todo en un solo useMemo con dependencias explícitas ──
   const filtered = useMemo(() => {
-    // 1. Filtrar
+    const q = search.toLowerCase().trim();
     const list = data.filter(item => {
-      const q = search.toLowerCase();
-      if (q && !item.ticker.toLowerCase().includes(q) && !item.name.toLowerCase().includes(q) && !item.pais.toLowerCase().includes(q)) return false;
-      if (filterAccion.length  && !filterAccion.includes(item.actionType))          return false;
-      if (filterPais.length    && !filterPais.includes(item.pais))                  return false;
-      if (filterQCo.length     && !filterQCo.includes(item.qualityCo))              return false;
-      if (filterQDiv.length    && !inQDivRange(item.qualityDiv, filterQDiv))        return false;
-      if (filterDivGro.length  && !inDivGroRange(item.divGro, filterDivGro))        return false;
+      if (q) {
+        const matchSearch =
+          item.ticker.toLowerCase().includes(q) ||
+          item.name.toLowerCase().includes(q) ||
+          item.pais.toLowerCase().includes(q);
+        if (!matchSearch) return false;
+      }
+      if (filterAccion.length  && !filterAccion.includes(item.actionType))     return false;
+      if (filterPais.length    && !filterPais.includes(item.pais))             return false;
+      if (filterQCo.length     && !filterQCo.includes(item.qualityCo))         return false;
+      if (filterQDiv.length    && !inQDivRange(item.qualityDiv, filterQDiv))   return false;
+      if (filterDivGro.length  && !inDivGroRange(item.divGro, filterDivGro))   return false;
       return true;
     });
 
-    // 2. Ordenar con copia del array y sorts capturado en closure
-    const currentSorts = sorts;
     return [...list].sort((a, b) => {
-      for (const s of currentSorts) {
+      for (const s of sorts) {
         let va = a[s.field] ?? "";
         let vb = b[s.field] ?? "";
         if (typeof va === "string") va = va.toLowerCase();
@@ -368,11 +378,7 @@ export default function App() {
   }), [data]);
 
   const totalActive = filterAccion.length + filterPais.length + filterQCo.length + filterQDiv.length + filterDivGro.length;
-
-  const clearAll = () => {
-    setFilterAccion([]); setFilterPais([]); setFilterQCo([]);
-    setFilterQDiv([]); setFilterDivGro([]); setSearch("");
-  };
+  const clearAll = () => { setFilterAccion([]); setFilterPais([]); setFilterQCo([]); setFilterQDiv([]); setFilterDivGro([]); setSearch(""); };
 
   return (
     <div style={{ minHeight: "100vh", background: "#030712", color: "#e2e8f0", fontFamily: "'DM Mono','Courier New',monospace" }}>
@@ -382,10 +388,10 @@ export default function App() {
         ::-webkit-scrollbar{width:6px}
         ::-webkit-scrollbar-track{background:#0f172a}
         ::-webkit-scrollbar-thumb{background:#334155;border-radius:3px}
-        .card{transition:transform .2s,box-shadow .2s}
+        .card{transition:transform .2s}
         .card:hover{transform:translateY(-3px)}
         .btn{border:none;cursor:pointer;font-family:inherit;font-weight:700;font-size:11px;letter-spacing:.08em;padding:7px 14px;border-radius:6px;transition:all .15s;text-transform:uppercase}
-        input,select{font-family:inherit}
+        input{font-family:inherit}
         .stat-card{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:12px 18px}
         .grid-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
         @media(max-width:768px){.grid-cards{grid-template-columns:1fr}}
@@ -401,17 +407,22 @@ export default function App() {
         <div>
           <div style={{ fontFamily: "'Space Grotesk',sans-serif", fontSize: 26, fontWeight: 800, letterSpacing: "-0.04em", display: "flex", alignItems: "baseline", gap: 4 }}>
             <span style={{ color: "#10b981" }}>CEDEAR</span><span style={{ color: "#e2e8f0" }}>PRO</span>
-            <span style={{ fontSize: 10, fontWeight: 400, color: "#475569", marginLeft: 10, letterSpacing: "0.1em" }}>v3.1</span>
+            <span style={{ fontSize: 10, fontWeight: 400, color: "#475569", marginLeft: 10, letterSpacing: "0.1em" }}>v3.2</span>
           </div>
           <div style={{ color: "#475569", fontSize: 10, letterSpacing: "0.15em", marginTop: 3, display: "flex", alignItems: "center", gap: 8 }}>
-            <span>TABLERO · {data.length} ACTIVOS</span>
+            <span>TABLERO · {data.length} ACTIVOS CARGADOS</span>
             {error
-              ? <span style={{ color: "#ef4444", display: "flex", alignItems: "center", gap: 4 }}><WifiOff size={11}/> SIN CONEXIÓN</span>
+              ? <span style={{ color: "#ef4444", display: "flex", alignItems: "center", gap: 4 }}><WifiOff size={11}/> ERROR: {errorMsg}</span>
               : lastUpdate && <span style={{ display: "flex", alignItems: "center", gap: 4 }}><Wifi size={11} style={{ color: "#10b981" }}/>{lastUpdate.toLocaleTimeString("es-AR")}</span>
             }
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          {/* Botón debug */}
+          <button className="btn" onClick={() => setDebug(d => !d)}
+            style={{ background: debug ? "#fbbf2422" : "#0f172a", border: `1px solid ${debug ? "#fbbf24" : "#1e293b"}`, color: debug ? "#fbbf24" : "#334155" }}>
+            DEBUG
+          </button>
           <button className="btn" onClick={() => fetchData(true)} style={{ background: "#0f172a", border: "1px solid #1e293b", color: "#64748b", padding: "9px 12px" }}>
             <RefreshCw size={14} className={refreshing ? "spin" : ""} />
           </button>
@@ -429,12 +440,35 @@ export default function App() {
         </div>
       </div>
 
+      {/* PANEL DEBUG */}
+      {debug && (
+        <div style={{ background: "#0a0f1a", border: "1px solid #fbbf2444", margin: "12px 28px", borderRadius: 8, padding: "14px 16px", fontSize: 11, color: "#94a3b8" }}>
+          <div style={{ color: "#fbbf24", marginBottom: 8, fontWeight: 700 }}>🔍 PANEL DE DIAGNÓSTICO</div>
+          <div>Total activos cargados: <span style={{ color: "#10b981" }}>{data.length}</span></div>
+          <div>Mostrando (filtrados): <span style={{ color: "#10b981" }}>{filtered.length}</span></div>
+          <div>Search actual: "<span style={{ color: "#e2e8f0" }}>{search}</span>"</div>
+          <div>Filtros activos: <span style={{ color: "#e2e8f0" }}>{JSON.stringify({ filterAccion, filterPais, filterQCo, filterQDiv, filterDivGro })}</span></div>
+          <div>Sorts: <span style={{ color: "#e2e8f0" }}>{JSON.stringify(sorts)}</span></div>
+          {data.length > 0 && <div style={{ marginTop: 8 }}>Primer activo: <span style={{ color: "#e2e8f0" }}>{JSON.stringify(data[0])}</span></div>}
+          {rawDebug && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ color: "#fbbf24", marginBottom: 4 }}>Primeros 500 chars del CSV:</div>
+              <pre style={{ color: "#64748b", fontSize: 9, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{rawDebug}</pre>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* FILTROS */}
       <div style={{ padding: "12px 28px", borderBottom: "1px solid #0f172a", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
         <div style={{ position: "relative" }}>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar ticker, nombre, país..."
-            style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 7, padding: "8px 12px 8px 34px", color: "#e2e8f0", fontSize: 12, outline: "none", width: 220 }} />
-          <Search size={13} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "#475569" }} />
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Buscar ticker, nombre, país..."
+            style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 7, padding: "8px 12px 8px 34px", color: "#e2e8f0", fontSize: 12, outline: "none", width: 230 }}
+          />
+          <Search size={13} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "#475569", pointerEvents: "none" }} />
         </div>
 
         <FilterDropdown label="Acción" color="#10b981"
@@ -459,7 +493,7 @@ export default function App() {
         )}
       </div>
 
-      {/* ORDEN MÚLTIPLE */}
+      {/* ORDEN */}
       <div style={{ padding: "10px 28px", borderBottom: "1px solid #0a0f1a", display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
         <span style={{ fontSize: 9, color: "#334155", letterSpacing: "0.12em", marginRight: 4 }}>ORDENAR:</span>
         {SORT_OPTIONS.map(opt => {
@@ -484,7 +518,7 @@ export default function App() {
         })}
         {sorts.length > 1 && (
           <div className="sort-chip" onClick={() => setSorts([{ field: "ticker", dir: "asc" }])} style={{ color: "#475569" }}>
-            <X size={10}/> Reset orden
+            <X size={10}/> Reset
           </div>
         )}
       </div>
@@ -495,16 +529,23 @@ export default function App() {
 
         {!loading && error && (
           <div style={{ textAlign: "center", padding: "60px 0", color: "#ef4444", background: "#1c0a0a", borderRadius: 12, border: "1px solid #7f1d1d" }}>
-            <div style={{ fontSize: 14, marginBottom: 8 }}>⚠ No se pudo conectar con Google Sheets</div>
-            <div style={{ fontSize: 11, color: "#9a3412" }}>Verificá que el link CSV sea correcto y esté publicado</div>
-            <button className="btn" onClick={() => fetchData(true)} style={{ marginTop: 16, background: "#7f1d1d", color: "#fca5a5", border: "none" }}>Reintentar</button>
+            <div style={{ fontSize: 14, marginBottom: 8 }}>⚠ Error: {errorMsg}</div>
+            <div style={{ fontSize: 11, color: "#9a3412", marginBottom: 16 }}>Activá el botón DEBUG arriba para ver más detalles</div>
+            <button className="btn" onClick={() => fetchData(true)} style={{ background: "#7f1d1d", color: "#fca5a5", border: "none" }}>Reintentar</button>
           </div>
         )}
 
-        {!loading && !error && (
+        {!loading && !error && data.length === 0 && (
+          <div style={{ textAlign: "center", padding: "60px 0", color: "#f97316", background: "#1c1206", borderRadius: 12, border: "1px solid #7c2d12" }}>
+            <div style={{ fontSize: 14, marginBottom: 8 }}>⚠ El CSV se cargó pero no se pudieron parsear datos</div>
+            <div style={{ fontSize: 11, color: "#9a3412" }}>Activá DEBUG para ver el contenido crudo del CSV</div>
+          </div>
+        )}
+
+        {!loading && !error && data.length > 0 && (
           <>
             <div style={{ marginBottom: 12, color: "#334155", fontSize: 10, letterSpacing: "0.1em" }}>
-              {filtered.length} de {data.length} ACTIVOS · ACTUALIZA CADA {REFRESH_MINUTES} MIN
+              MOSTRANDO {filtered.length} DE {data.length} ACTIVOS · ACTUALIZA CADA {REFRESH_MINUTES} MIN
             </div>
             <div className="grid-cards">
               {filtered.map(item => {
@@ -518,7 +559,7 @@ export default function App() {
                       <div>
                         <div style={{ fontFamily: "'Space Grotesk',sans-serif", fontSize: 19, fontWeight: 800, letterSpacing: "-0.02em", color: "#f8fafc" }}>{item.ticker}</div>
                         <div style={{ color: "#64748b", fontSize: 10, marginTop: 2, maxWidth: 155, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.name}</div>
-                        {item.pais && <div style={{ color: "#334155", fontSize: 9, marginTop: 2, letterSpacing: "0.06em" }}>{item.pais}</div>}
+                        {item.pais && <div style={{ color: "#334155", fontSize: 9, marginTop: 2 }}>{item.pais}</div>}
                       </div>
                       <div style={{ textAlign: "right" }}>
                         <div style={{ fontSize: 13, fontWeight: 600, color: "#e2e8f0" }}>{formatArs(item.precioArs)}</div>
@@ -545,7 +586,7 @@ export default function App() {
               })}
             </div>
             {filtered.length === 0 && (
-              <div style={{ textAlign: "center", padding: "80px 0", color: "#1e293b", fontSize: 13, letterSpacing: "0.1em" }}>
+              <div style={{ textAlign: "center", padding: "60px 0", color: "#1e293b", fontSize: 13, letterSpacing: "0.1em" }}>
                 SIN RESULTADOS · PROBÁ AJUSTAR LOS FILTROS
               </div>
             )}
