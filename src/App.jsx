@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { Search, RefreshCw, Wifi, WifiOff, ChevronDown, X } from "lucide-react";
 
 // ============================================================
@@ -9,12 +9,8 @@ const REFRESH_MINUTES = 15;
 const parseCSV = (text) => {
   const lines = text.trim().split("\n");
   if (lines.length < 2) return [];
-  
-  // Limpiar BOM si existe
   const firstLine = lines[0].replace(/^\uFEFF/, "");
   const headers = firstLine.split(",").map(h => h.trim().toLowerCase().replace(/"/g, ""));
-  
-  console.log("Headers encontrados:", headers);
 
   const results = [];
   for (let i = 1; i < lines.length; i++) {
@@ -36,7 +32,11 @@ const parseCSV = (text) => {
     };
 
     const ticker = get("ticker").toUpperCase();
-    if (!ticker || ticker === "#N/A" || ticker === "") continue;
+    // Saltar filas sin ticker válido o con datos de error masivo
+    if (!ticker || ticker === "#N/A" || ticker === "" || ticker === "TICKER") continue;
+    // Saltar filas donde el nombre tampoco existe (filas vacías del sheet)
+    const nombre = get("nombre");
+    if (!nombre || nombre === "#N/A") continue;
 
     const nivelCompra = get("nivel compra");
     const nivelVenta  = get("nivel venta");
@@ -57,11 +57,14 @@ const parseCSV = (text) => {
     const rawQCo     = get("calidad empresa");
     const qualityCo  = (!rawQCo || rawQCo === "No encontrado" || rawQCo === "#N/A") ? "" : rawQCo;
     const qualityDiv = parseFloat(get("calidad dividendo")) || 0;
-    const divGro     = parseFloat(get("divgro")) || 0;
+
+    // divgro viene como "SI" / "No encontrado" / número — normalizar
+    const rawDivGro  = get("divgro").toUpperCase();
+    const hasDivGro  = rawDivGro === "SI" || rawDivGro === "SÍ" || rawDivGro === "YES";
 
     results.push({
       ticker,
-      name:        get("nombre"),
+      name:        nombre,
       pais,
       precioArs:   parseFloat(get("precio ars"))       || 0,
       precioUsd:   parseFloat(get("precio usd"))       || 0,
@@ -72,13 +75,11 @@ const parseCSV = (text) => {
       yld:         parseFloat(get("yield"))            || 0,
       divGrowth:   parseFloat(get("5-year dividend"))  || 0,
       salesGrowth: parseFloat(get("5-year sales"))     || 0,
-      divGro,
+      hasDivGro,
       qualityCo,
       qualityDiv,
     });
   }
-
-  console.log(`Parseados ${results.length} activos:`, results.slice(0, 3));
   return results;
 };
 
@@ -172,28 +173,46 @@ function Metric({ label, value, color }) {
   );
 }
 
+// ─── FilterDropdown — versión corregida ──────────────────────
+// Usa click en vez de mousedown para evitar conflicto con el cierre
 function FilterDropdown({ label, options, selected, onChange, color = "#64748b" }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef(null);
+  const containerRef = useRef(null);
   const hasActive = selected.length > 0;
 
+  // Cerrar al clickear fuera
   useEffect(() => {
-    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
+    if (!open) return;
+    const handler = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    // timeout para no capturar el mismo click que abrió
+    const t = setTimeout(() => document.addEventListener("click", handler), 0);
+    return () => { clearTimeout(t); document.removeEventListener("click", handler); };
+  }, [open]);
+
+  const toggle = (val) => {
+    const next = selected.includes(val)
+      ? selected.filter(x => x !== val)
+      : [...selected, val];
+    onChange(next);
+  };
 
   return (
-    <div ref={ref} style={{ position: "relative" }}>
-      <button onClick={() => setOpen(o => !o)} style={{
-        display: "flex", alignItems: "center", gap: 6,
-        background: hasActive ? color + "22" : "#0f172a",
-        border: `1px solid ${hasActive ? color : "#1e293b"}`,
-        borderRadius: 6, padding: "7px 12px", cursor: "pointer",
-        color: hasActive ? color : "#64748b", fontSize: 11,
-        fontFamily: "inherit", fontWeight: 700, letterSpacing: "0.08em",
-        textTransform: "uppercase", whiteSpace: "nowrap",
-      }}>
+    <div ref={containerRef} style={{ position: "relative" }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          display: "flex", alignItems: "center", gap: 6,
+          background: hasActive ? color + "22" : "#0f172a",
+          border: `1px solid ${hasActive ? color : "#1e293b"}`,
+          borderRadius: 6, padding: "7px 12px", cursor: "pointer",
+          color: hasActive ? color : "#64748b", fontSize: 11,
+          fontFamily: "inherit", fontWeight: 700, letterSpacing: "0.08em",
+          textTransform: "uppercase", whiteSpace: "nowrap",
+        }}>
         {label}{hasActive ? ` (${selected.length})` : ""}
         <ChevronDown size={12} style={{ transform: open ? "rotate(180deg)" : "none", transition: "0.2s" }} />
       </button>
@@ -202,38 +221,47 @@ function FilterDropdown({ label, options, selected, onChange, color = "#64748b" 
         <div style={{
           position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 200,
           background: "#0f172a", border: "1px solid #1e293b", borderRadius: 8,
-          padding: "6px", minWidth: 190, boxShadow: "0 8px 32px #000c",
+          padding: "6px", minWidth: 200, boxShadow: "0 8px 32px #000d",
         }}>
           {options.length === 0 && (
-            <div style={{ padding: "8px 10px", color: "#334155", fontSize: 11 }}>Cargando opciones...</div>
+            <div style={{ padding: "8px 10px", color: "#334155", fontSize: 11 }}>Sin opciones</div>
           )}
           {options.map(opt => {
             const isOn = selected.includes(opt.value);
             return (
-              <div key={opt.value}
-                onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); onChange(isOn ? selected.filter(x => x !== opt.value) : [...selected, opt.value]); }}
+              <div
+                key={opt.value}
+                onClick={(e) => { e.stopPropagation(); toggle(opt.value); }}
                 style={{
                   display: "flex", alignItems: "center", gap: 8,
-                  padding: "8px 10px", borderRadius: 5, cursor: "pointer",
+                  padding: "9px 10px", borderRadius: 5, cursor: "pointer",
                   background: isOn ? color + "22" : "transparent",
                   color: isOn ? color : "#94a3b8", fontSize: 12,
-                  userSelect: "none",
+                  userSelect: "none", transition: "background 0.1s",
                 }}>
                 <span style={{
-                  width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                  width: 15, height: 15, borderRadius: 3, flexShrink: 0,
                   border: `1.5px solid ${isOn ? color : "#334155"}`,
                   background: isOn ? color : "transparent",
                   display: "flex", alignItems: "center", justifyContent: "center",
+                  transition: "all 0.1s",
                 }}>
-                  {isOn && <span style={{ color: "#fff", fontSize: 9, fontWeight: 900 }}>✓</span>}
+                  {isOn && <span style={{ color: "#fff", fontSize: 10, fontWeight: 900, lineHeight: 1 }}>✓</span>}
                 </span>
                 {opt.label}
               </div>
             );
           })}
           {selected.length > 0 && (
-            <div onMouseDown={(e) => { e.preventDefault(); onChange([]); }}
-              style={{ padding: "6px 10px", marginTop: 4, borderTop: "1px solid #1e293b", cursor: "pointer", color: "#ef4444", fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
+            <div
+              onClick={(e) => { e.stopPropagation(); onChange([]); }}
+              style={{
+                padding: "7px 10px", marginTop: 4,
+                borderTop: "1px solid #1e293b", cursor: "pointer",
+                color: "#ef4444", fontSize: 11,
+                display: "flex", alignItems: "center", gap: 6,
+                userSelect: "none",
+              }}>
               <X size={11} /> Limpiar filtro
             </div>
           )}
@@ -249,10 +277,10 @@ const SORT_OPTIONS = [
   { value: "yld",         label: "Yield"         },
   { value: "salesGrowth", label: "Crec. Ventas" },
   { value: "divGrowth",   label: "Crec. Div"    },
-  { value: "divGro",      label: "DivGro"       },
   { value: "qualityDiv",  label: "Score Div"    },
 ];
 
+// ─── App ─────────────────────────────────────────────────────
 export default function App() {
   const [data, setData]             = useState([]);
   const [loading, setLoading]       = useState(true);
@@ -260,15 +288,13 @@ export default function App() {
   const [errorMsg, setErrorMsg]     = useState("");
   const [lastUpdate, setLastUpdate] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [debug, setDebug]           = useState(false);
-  const [rawDebug, setRawDebug]     = useState("");
 
   const [search, setSearch]             = useState("");
   const [filterAccion, setFilterAccion] = useState([]);
   const [filterPais, setFilterPais]     = useState([]);
   const [filterQCo, setFilterQCo]       = useState([]);
   const [filterQDiv, setFilterQDiv]     = useState([]);
-  const [filterDivGro, setFilterDivGro] = useState([]);
+  const [filterDivGro, setFilterDivGro] = useState([]);   // "si" / "no"
   const [sorts, setSorts]               = useState([{ field: "ticker", dir: "asc" }]);
 
   const fetchData = async (manual = false) => {
@@ -277,17 +303,12 @@ export default function App() {
       const res = await fetch(SHEET_URL + "&t=" + Date.now(), { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const text = await res.text();
-      setRawDebug(text.slice(0, 500)); // primeros 500 chars para debug
       const parsed = parseCSV(text);
-      if (parsed.length === 0) {
-        setErrorMsg("CSV parseado pero sin datos válidos. Verificá el formato del Sheet.");
-      }
       setData(parsed);
       setLastUpdate(new Date());
       setError(false);
       setErrorMsg("");
     } catch (e) {
-      console.error("fetchData error:", e);
       setError(true);
       setErrorMsg(e.message);
     } finally {
@@ -302,6 +323,7 @@ export default function App() {
     return () => clearInterval(iv);
   }, []);
 
+  // Opciones dinámicas
   const paisOptions = useMemo(() =>
     [...new Set(data.map(d => d.pais).filter(Boolean))].sort().map(p => ({ value: p, label: p }))
   , [data]);
@@ -310,21 +332,23 @@ export default function App() {
     [...new Set(data.map(d => d.qualityCo).filter(Boolean))].sort().map(q => ({ value: q, label: q }))
   , [data]);
 
-  const qDivRanges  = [{ value: "90-100", label: "90–100" }, { value: "70-89", label: "70–89" }, { value: "50-69", label: "50–69" }, { value: "<50", label: "< 50" }];
-  const divGroRanges = [{ value: ">15", label: "> 15%" }, { value: "10-15", label: "10–15%" }, { value: "5-9", label: "5–9%" }, { value: "<5", label: "< 5%" }];
+  const qDivRanges = [
+    { value: "90-100", label: "Score 90 – 100" },
+    { value: "70-89",  label: "Score 70 – 89"  },
+    { value: "50-69",  label: "Score 50 – 69"  },
+    { value: "<50",    label: "Score < 50"      },
+  ];
+
+  const divGroOpts = [
+    { value: "si",  label: "✓ Con DivGro" },
+    { value: "no",  label: "✗ Sin DivGro" },
+  ];
 
   const inQDivRange = (val, ranges) => ranges.some(r => {
     if (r === "90-100") return val >= 90;
     if (r === "70-89")  return val >= 70 && val < 90;
     if (r === "50-69")  return val >= 50 && val < 70;
     if (r === "<50")    return val > 0 && val < 50;
-    return false;
-  });
-  const inDivGroRange = (val, ranges) => ranges.some(r => {
-    if (r === ">15")   return val > 15;
-    if (r === "10-15") return val >= 10 && val <= 15;
-    if (r === "5-9")   return val >= 5 && val < 10;
-    if (r === "<5")    return val > 0 && val < 5;
     return false;
   });
 
@@ -341,19 +365,30 @@ export default function App() {
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
+
     const list = data.filter(item => {
+      // Búsqueda de texto
       if (q) {
-        const matchSearch =
-          item.ticker.toLowerCase().includes(q) ||
-          item.name.toLowerCase().includes(q) ||
-          item.pais.toLowerCase().includes(q);
-        if (!matchSearch) return false;
+        const hit = item.ticker.toLowerCase().includes(q) ||
+                    item.name.toLowerCase().includes(q) ||
+                    item.pais.toLowerCase().includes(q);
+        if (!hit) return false;
       }
-      if (filterAccion.length  && !filterAccion.includes(item.actionType))     return false;
-      if (filterPais.length    && !filterPais.includes(item.pais))             return false;
-      if (filterQCo.length     && !filterQCo.includes(item.qualityCo))         return false;
-      if (filterQDiv.length    && !inQDivRange(item.qualityDiv, filterQDiv))   return false;
-      if (filterDivGro.length  && !inDivGroRange(item.divGro, filterDivGro))   return false;
+      // Acción
+      if (filterAccion.length && !filterAccion.includes(item.actionType)) return false;
+      // País
+      if (filterPais.length && !filterPais.includes(item.pais)) return false;
+      // Calidad cía
+      if (filterQCo.length && !filterQCo.includes(item.qualityCo)) return false;
+      // Score div
+      if (filterQDiv.length && !inQDivRange(item.qualityDiv, filterQDiv)) return false;
+      // DivGro
+      if (filterDivGro.length) {
+        const wantSi = filterDivGro.includes("si");
+        const wantNo = filterDivGro.includes("no");
+        if (wantSi && !item.hasDivGro) return false;
+        if (wantNo && item.hasDivGro)  return false;
+      }
       return true;
     });
 
@@ -377,7 +412,7 @@ export default function App() {
     neutral:    data.filter(i => i.actionType === "NEUTRAL").length,
   }), [data]);
 
-  const totalActive = filterAccion.length + filterPais.length + filterQCo.length + filterQDiv.length + filterDivGro.length;
+  const totalActive = filterAccion.length + filterPais.length + filterQCo.length + filterQDiv.length + filterDivGro.length + (search ? 1 : 0);
   const clearAll = () => { setFilterAccion([]); setFilterPais([]); setFilterQCo([]); setFilterQDiv([]); setFilterDivGro([]); setSearch(""); };
 
   return (
@@ -391,13 +426,13 @@ export default function App() {
         .card{transition:transform .2s}
         .card:hover{transform:translateY(-3px)}
         .btn{border:none;cursor:pointer;font-family:inherit;font-weight:700;font-size:11px;letter-spacing:.08em;padding:7px 14px;border-radius:6px;transition:all .15s;text-transform:uppercase}
-        input{font-family:inherit}
+        input{font-family:inherit;outline:none}
         .stat-card{background:#0f172a;border:1px solid #1e293b;border-radius:12px;padding:12px 18px}
         .grid-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
         @media(max-width:768px){.grid-cards{grid-template-columns:1fr}}
         @keyframes spin{to{transform:rotate(360deg)}}
         .spin{animation:spin 1s linear infinite}
-        .sort-chip{display:inline-flex;align-items:center;gap:4px;background:#1e293b;border:1px solid #334155;border-radius:20px;padding:5px 11px;font-size:10px;color:#94a3b8;cursor:pointer;transition:all .15s;letter-spacing:.06em;font-family:inherit;user-select:none}
+        .sort-chip{display:inline-flex;align-items:center;gap:4px;background:#1e293b;border:1px solid #334155;border-radius:20px;padding:5px 12px;font-size:10px;color:#94a3b8;cursor:pointer;transition:all .15s;letter-spacing:.06em;font-family:inherit;user-select:none}
         .sort-chip:hover{border-color:#475569;color:#e2e8f0}
         .sort-chip.active{background:#3b82f622;border-color:#3b82f6;color:#93c5fd}
       `}</style>
@@ -407,22 +442,17 @@ export default function App() {
         <div>
           <div style={{ fontFamily: "'Space Grotesk',sans-serif", fontSize: 26, fontWeight: 800, letterSpacing: "-0.04em", display: "flex", alignItems: "baseline", gap: 4 }}>
             <span style={{ color: "#10b981" }}>CEDEAR</span><span style={{ color: "#e2e8f0" }}>PRO</span>
-            <span style={{ fontSize: 10, fontWeight: 400, color: "#475569", marginLeft: 10, letterSpacing: "0.1em" }}>v3.2</span>
+            <span style={{ fontSize: 10, fontWeight: 400, color: "#475569", marginLeft: 10, letterSpacing: "0.1em" }}>v3.3</span>
           </div>
           <div style={{ color: "#475569", fontSize: 10, letterSpacing: "0.15em", marginTop: 3, display: "flex", alignItems: "center", gap: 8 }}>
-            <span>TABLERO · {data.length} ACTIVOS CARGADOS</span>
+            <span>TABLERO · {data.length} ACTIVOS</span>
             {error
-              ? <span style={{ color: "#ef4444", display: "flex", alignItems: "center", gap: 4 }}><WifiOff size={11}/> ERROR: {errorMsg}</span>
+              ? <span style={{ color: "#ef4444", display: "flex", alignItems: "center", gap: 4 }}><WifiOff size={11}/> {errorMsg}</span>
               : lastUpdate && <span style={{ display: "flex", alignItems: "center", gap: 4 }}><Wifi size={11} style={{ color: "#10b981" }}/>{lastUpdate.toLocaleTimeString("es-AR")}</span>
             }
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {/* Botón debug */}
-          <button className="btn" onClick={() => setDebug(d => !d)}
-            style={{ background: debug ? "#fbbf2422" : "#0f172a", border: `1px solid ${debug ? "#fbbf24" : "#1e293b"}`, color: debug ? "#fbbf24" : "#334155" }}>
-            DEBUG
-          </button>
           <button className="btn" onClick={() => fetchData(true)} style={{ background: "#0f172a", border: "1px solid #1e293b", color: "#64748b", padding: "9px 12px" }}>
             <RefreshCw size={14} className={refreshing ? "spin" : ""} />
           </button>
@@ -440,33 +470,19 @@ export default function App() {
         </div>
       </div>
 
-      {/* PANEL DEBUG */}
-      {debug && (
-        <div style={{ background: "#0a0f1a", border: "1px solid #fbbf2444", margin: "12px 28px", borderRadius: 8, padding: "14px 16px", fontSize: 11, color: "#94a3b8" }}>
-          <div style={{ color: "#fbbf24", marginBottom: 8, fontWeight: 700 }}>🔍 PANEL DE DIAGNÓSTICO</div>
-          <div>Total activos cargados: <span style={{ color: "#10b981" }}>{data.length}</span></div>
-          <div>Mostrando (filtrados): <span style={{ color: "#10b981" }}>{filtered.length}</span></div>
-          <div>Search actual: "<span style={{ color: "#e2e8f0" }}>{search}</span>"</div>
-          <div>Filtros activos: <span style={{ color: "#e2e8f0" }}>{JSON.stringify({ filterAccion, filterPais, filterQCo, filterQDiv, filterDivGro })}</span></div>
-          <div>Sorts: <span style={{ color: "#e2e8f0" }}>{JSON.stringify(sorts)}</span></div>
-          {data.length > 0 && <div style={{ marginTop: 8 }}>Primer activo: <span style={{ color: "#e2e8f0" }}>{JSON.stringify(data[0])}</span></div>}
-          {rawDebug && (
-            <div style={{ marginTop: 8 }}>
-              <div style={{ color: "#fbbf24", marginBottom: 4 }}>Primeros 500 chars del CSV:</div>
-              <pre style={{ color: "#64748b", fontSize: 9, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{rawDebug}</pre>
-            </div>
-          )}
-        </div>
-      )}
-
       {/* FILTROS */}
       <div style={{ padding: "12px 28px", borderBottom: "1px solid #0f172a", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        {/* Search */}
         <div style={{ position: "relative" }}>
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Buscar ticker, nombre, país..."
-            style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 7, padding: "8px 12px 8px 34px", color: "#e2e8f0", fontSize: 12, outline: "none", width: 230 }}
+            style={{
+              background: "#0f172a", border: "1px solid #1e293b",
+              borderRadius: 7, padding: "8px 12px 8px 34px",
+              color: "#e2e8f0", fontSize: 12, width: 230,
+            }}
           />
           <Search size={13} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "#475569", pointerEvents: "none" }} />
         </div>
@@ -480,10 +496,10 @@ export default function App() {
           ]}
           selected={filterAccion} onChange={setFilterAccion} />
 
-        <FilterDropdown label="País"        color="#60a5fa" options={paisOptions}  selected={filterPais}   onChange={setFilterPais}   />
-        <FilterDropdown label="Calidad Cía" color="#a78bfa" options={qCoOptions}   selected={filterQCo}    onChange={setFilterQCo}    />
-        <FilterDropdown label="Score Div"   color="#fb923c" options={qDivRanges}   selected={filterQDiv}   onChange={setFilterQDiv}   />
-        <FilterDropdown label="DivGro"      color="#34d399" options={divGroRanges} selected={filterDivGro} onChange={setFilterDivGro} />
+        <FilterDropdown label="País"        color="#60a5fa" options={paisOptions} selected={filterPais}   onChange={setFilterPais}   />
+        <FilterDropdown label="Calidad Cía" color="#a78bfa" options={qCoOptions}  selected={filterQCo}    onChange={setFilterQCo}    />
+        <FilterDropdown label="Score Div"   color="#fb923c" options={qDivRanges}  selected={filterQDiv}   onChange={setFilterQDiv}   />
+        <FilterDropdown label="DivGro"      color="#34d399" options={divGroOpts}  selected={filterDivGro} onChange={setFilterDivGro} />
 
         {totalActive > 0 && (
           <button className="btn" onClick={clearAll}
@@ -529,20 +545,12 @@ export default function App() {
 
         {!loading && error && (
           <div style={{ textAlign: "center", padding: "60px 0", color: "#ef4444", background: "#1c0a0a", borderRadius: 12, border: "1px solid #7f1d1d" }}>
-            <div style={{ fontSize: 14, marginBottom: 8 }}>⚠ Error: {errorMsg}</div>
-            <div style={{ fontSize: 11, color: "#9a3412", marginBottom: 16 }}>Activá el botón DEBUG arriba para ver más detalles</div>
-            <button className="btn" onClick={() => fetchData(true)} style={{ background: "#7f1d1d", color: "#fca5a5", border: "none" }}>Reintentar</button>
+            <div style={{ fontSize: 14, marginBottom: 8 }}>⚠ {errorMsg}</div>
+            <button className="btn" onClick={() => fetchData(true)} style={{ marginTop: 12, background: "#7f1d1d", color: "#fca5a5", border: "none" }}>Reintentar</button>
           </div>
         )}
 
-        {!loading && !error && data.length === 0 && (
-          <div style={{ textAlign: "center", padding: "60px 0", color: "#f97316", background: "#1c1206", borderRadius: 12, border: "1px solid #7c2d12" }}>
-            <div style={{ fontSize: 14, marginBottom: 8 }}>⚠ El CSV se cargó pero no se pudieron parsear datos</div>
-            <div style={{ fontSize: 11, color: "#9a3412" }}>Activá DEBUG para ver el contenido crudo del CSV</div>
-          </div>
-        )}
-
-        {!loading && !error && data.length > 0 && (
+        {!loading && !error && (
           <>
             <div style={{ marginBottom: 12, color: "#334155", fontSize: 10, letterSpacing: "0.1em" }}>
               MOSTRANDO {filtered.length} DE {data.length} ACTIVOS · ACTUALIZA CADA {REFRESH_MINUTES} MIN
@@ -564,6 +572,9 @@ export default function App() {
                       <div style={{ textAlign: "right" }}>
                         <div style={{ fontSize: 13, fontWeight: 600, color: "#e2e8f0" }}>{formatArs(item.precioArs)}</div>
                         <div style={{ fontSize: 10, color: "#475569", marginTop: 2 }}>{formatUsd(item.precioUsd)} USD</div>
+                        {item.hasDivGro && (
+                          <div style={{ fontSize: 9, color: "#34d399", marginTop: 3, letterSpacing: "0.08em" }}>● DIVGRO</div>
+                        )}
                       </div>
                     </div>
 
@@ -576,7 +587,6 @@ export default function App() {
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7 }}>
                       {item.yld > 0         && <Metric label="Yield"           value={`${item.yld}%`}           color="#a78bfa" />}
                       {item.divGrowth > 0   && <Metric label="Crec. Div 5A"    value={`${item.divGrowth}%`}     color="#60a5fa" />}
-                      {item.divGro > 0      && <Metric label="DivGro"          value={`${item.divGro}%`}        color="#34d399" />}
                       {item.salesGrowth > 0 && <Metric label="Crec. Ventas 5A" value={`${item.salesGrowth}%`}  color="#7dd3fc" />}
                       {item.qualityCo       && <Metric label="Calidad Cía"      value={item.qualityCo}           color={qColor}  />}
                       {item.qualityDiv > 0  && <Metric label="Score Div"        value={`${item.qualityDiv}/100`} color="#fb923c" />}
