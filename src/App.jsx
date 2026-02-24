@@ -59,7 +59,7 @@ const applyFilters = (data, search, filterAccion, filterPais, filterQCo, filterD
   const list = data.filter(item => {
     if (q && !item.ticker.toLowerCase().includes(q) && !item.name.toLowerCase().includes(q) && !item.pais.toLowerCase().includes(q)) return false;
     if (filterAccion.length && !filterAccion.includes(item.actionType)) return false;
-    if (filterPais.length && (!item.pais || !filterPais.includes(item.pais))) return false;
+    if (filterPais.length   && !filterPais.includes(item.pais))         return false;
     if (filterQCo.length    && !filterQCo.includes(item.qualityCo))     return false;
     if (filterDivGro === "si" && !item.hasDivGro) return false;
     if (filterDivGro === "no" &&  item.hasDivGro) return false;
