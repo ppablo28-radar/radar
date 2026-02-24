@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useEffect } from "react";
 
 const SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQA-GSEGsVQ1yRtwSEIThbsitKF5Mz-ghiDEogLTuo66uaQ0W7aa-s7XkdV1jh3XT-ovAppzoO-6r3O/pub?gid=1126347347&single=true&output=csv";
 const REFRESH_MINUTES = 15;
@@ -42,16 +42,38 @@ const parseCSV = (text) => {
     const qualityCo = (!rawQCo || rawQCo === "No encontrado" || rawQCo === "#N/A") ? "" : rawQCo;
     results.push({
       ticker, name: nombre, pais, actionType, hasNivel, nivelCompra, nivelVenta, qualityCo,
-      precioArs:   parseFloat(get("precio ars"))      || 0,
-      precioUsd:   parseFloat(get("precio usd"))      || 0,
-      yld:         parseFloat(get("yield"))           || 0,
-      divGrowth:   parseFloat(get("5-year dividend")) || 0,
-      salesGrowth: parseFloat(get("5-year sales"))    || 0,
+      precioArs:   parseFloat(get("precio ars"))        || 0,
+      precioUsd:   parseFloat(get("precio usd"))        || 0,
+      yld:         parseFloat(get("yield"))             || 0,
+      divGrowth:   parseFloat(get("5-year dividend"))   || 0,
+      salesGrowth: parseFloat(get("5-year sales"))      || 0,
       qualityDiv:  parseFloat(get("calidad dividendo")) || 0,
       hasDivGro:   get("divgro").toUpperCase() === "SI",
     });
   }
   return results;
+};
+
+const applyFilters = (data, search, filterAccion, filterPais, filterQCo, filterDivGro, sortField, sortDir) => {
+  const q = search.toLowerCase().trim();
+  const list = data.filter(item => {
+    if (q && !item.ticker.toLowerCase().includes(q) && !item.name.toLowerCase().includes(q) && !item.pais.toLowerCase().includes(q)) return false;
+    if (filterAccion.length && !filterAccion.includes(item.actionType)) return false;
+    if (filterPais.length   && !filterPais.includes(item.pais))         return false;
+    if (filterQCo.length    && !filterQCo.includes(item.qualityCo))     return false;
+    if (filterDivGro === "si" && !item.hasDivGro) return false;
+    if (filterDivGro === "no" &&  item.hasDivGro) return false;
+    return true;
+  });
+  return [...list].sort((a, b) => {
+    let va = a[sortField] ?? "";
+    let vb = b[sortField] ?? "";
+    if (typeof va === "string") va = va.toLowerCase();
+    if (typeof vb === "string") vb = vb.toLowerCase();
+    if (va < vb) return sortDir === "asc" ? -1 : 1;
+    if (va > vb) return sortDir === "asc" ? 1 : -1;
+    return 0;
+  });
 };
 
 const SCALE = [
@@ -96,7 +118,7 @@ const qualityColor = (q) => {
   return "#8b5cf6";
 };
 
-const fmt = (v) => (!v || v <= 0) ? "—" : new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", minimumFractionDigits: 0 }).format(v);
+const fmt  = (v) => (!v || v <= 0) ? "—" : new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", minimumFractionDigits: 0 }).format(v);
 const fmtU = (v) => (!v || v <= 0) ? "—" : `$${v.toLocaleString("en-US", { minimumFractionDigits: 2 })}`;
 
 function LevelBar({ nivelCompra, nivelVenta, hasNivel }) {
@@ -106,7 +128,7 @@ function LevelBar({ nivelCompra, nivelVenta, hasNivel }) {
   return (
     <div>
       <div style={{ fontSize: 10, color: active.color, marginBottom: 6, fontWeight: 700, textTransform: "uppercase", display: "flex", alignItems: "center", gap: 5 }}>
-        <span style={{ width: 6, height: 6, borderRadius: "50%", background: active.color, display: "inline-block" }} />
+        <span style={{ width: 6, height: 6, borderRadius: "50%", background: active.color, display: "inline-block", boxShadow: `0 0 6px ${active.color}` }} />
         {active.label}
       </div>
       <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
@@ -142,48 +164,40 @@ function Metric({ label, value, color }) {
   );
 }
 
-// ─── BOTÓN de filtro simple — igual al debug que funcionó ────
 function FiltroBtn({ label, active, onClick, color = "#64748b", count }) {
   return (
-    <button
-      onClick={onClick}
-      style={{
-        background: active ? color + "33" : "#0f172a",
-        border: `1px solid ${active ? color : "#1e293b"}`,
-        color: active ? color : "#64748b",
-        borderRadius: 6, padding: "6px 12px",
-        cursor: "pointer", fontSize: 11,
-        fontFamily: "inherit", fontWeight: 700,
-        letterSpacing: "0.06em", textTransform: "uppercase",
-        whiteSpace: "nowrap",
-      }}>
+    <button onClick={onClick} style={{
+      background: active ? color + "33" : "#0f172a",
+      border: `1px solid ${active ? color : "#1e293b"}`,
+      color: active ? color : "#64748b",
+      borderRadius: 6, padding: "6px 12px", cursor: "pointer",
+      fontSize: 11, fontFamily: "inherit", fontWeight: 700,
+      letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap",
+    }}>
       {label}{count !== undefined ? ` (${count})` : ""}
     </button>
   );
 }
 
-// ─── SECCIÓN de filtro expandible ────────────────────────────
-function FiltroSection({ titulo, color, children }) {
+function FiltroSection({ titulo, children }) {
   const [open, setOpen] = useState(false);
   return (
     <div style={{ display: "inline-block", position: "relative" }}>
-      <button
-        onClick={() => setOpen(o => !o)}
-        style={{
-          background: "#0f172a", border: "1px solid #1e293b",
-          color: "#64748b", borderRadius: 6, padding: "7px 12px",
-          cursor: "pointer", fontSize: 11, fontFamily: "inherit",
-          fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
-          display: "flex", alignItems: "center", gap: 6,
-        }}>
+      <button onClick={() => setOpen(o => !o)} style={{
+        background: "#0f172a", border: "1px solid #1e293b", color: "#64748b",
+        borderRadius: 6, padding: "7px 12px", cursor: "pointer",
+        fontSize: 11, fontFamily: "inherit", fontWeight: 700,
+        letterSpacing: "0.08em", textTransform: "uppercase",
+        display: "flex", alignItems: "center", gap: 6,
+      }}>
         {titulo} {open ? "▲" : "▼"}
       </button>
       {open && (
         <div style={{
           position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 200,
-          background: "#0f172a", border: "1px solid #334155",
-          borderRadius: 8, padding: "10px", minWidth: 220,
-          boxShadow: "0 8px 32px #000d", display: "flex", flexWrap: "wrap", gap: 6,
+          background: "#0f172a", border: "1px solid #334155", borderRadius: 8,
+          padding: "10px", minWidth: 220, boxShadow: "0 8px 32px #000d",
+          display: "flex", flexWrap: "wrap", gap: 6,
         }}>
           {children}
         </div>
@@ -208,21 +222,43 @@ export default function App() {
   const [lastUpdate, setLastUpdate] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Filtros — arrays de valores seleccionados
-  const [search, setSearch]           = useState("");
+  const [search, setSearch]             = useState("");
   const [filterAccion, setFilterAccion] = useState([]);
   const [filterPais, setFilterPais]     = useState([]);
   const [filterQCo, setFilterQCo]       = useState([]);
-  const [filterDivGro, setFilterDivGro] = useState(null); // null | "si" | "no"
+  const [filterDivGro, setFilterDivGro] = useState(null);
+  const [sortField, setSortField]       = useState("ticker");
+  const [sortDir, setSortDir]           = useState("asc");
 
-  // Orden
-  const [sortField, setSortField] = useState("ticker");
-  const [sortDir, setSortDir]     = useState("asc");
+  // ── CLAVE: filtered es estado normal, no useMemo ──────────
+  const [filtered, setFiltered] = useState([]);
+  const [paisOptions, setPaisOptions]   = useState([]);
+  const [qCoOptions,  setQCoOptions]    = useState([]);
+  const [stats, setStats] = useState({ buy: 0, sellStrong: 0, sellSoft: 0, neutral: 0 });
 
   // LOG
-  const [log, setLog] = useState([]);
+  const [log, setLog]       = useState([]);
   const [showLog, setShowLog] = useState(false);
   const addLog = (msg) => setLog(prev => [`${new Date().toLocaleTimeString()}: ${msg}`, ...prev.slice(0, 30)]);
+
+  // Recalcular filtered cada vez que cambia cualquier filtro o los datos
+  useEffect(() => {
+    const result = applyFilters(data, search, filterAccion, filterPais, filterQCo, filterDivGro, sortField, sortDir);
+    addLog(`[FILTER] data:${data.length} → filtered:${result.length} | search:"${search}" accion:[${filterAccion}] pais:[${filterPais}] qco:[${filterQCo}] divgro:${filterDivGro} sort:${sortField} ${sortDir}`);
+    setFiltered(result);
+  }, [data, search, filterAccion, filterPais, filterQCo, filterDivGro, sortField, sortDir]);
+
+  // Recalcular opciones y stats cuando cambia data
+  useEffect(() => {
+    setPaisOptions([...new Set(data.map(d => d.pais).filter(Boolean))].sort());
+    setQCoOptions([...new Set(data.map(d => d.qualityCo).filter(Boolean))].sort());
+    setStats({
+      buy:        data.filter(i => i.actionType === "BUY").length,
+      sellStrong: data.filter(i => i.actionType === "SELL_STRONG").length,
+      sellSoft:   data.filter(i => i.actionType === "SELL_SOFT").length,
+      neutral:    data.filter(i => i.actionType === "NEUTRAL").length,
+    });
+  }, [data]);
 
   const fetchData = async (manual = false) => {
     if (manual) setRefreshing(true);
@@ -231,7 +267,6 @@ export default function App() {
       const res = await fetch(SHEET_URL + "&t=" + Date.now(), { cache: "no-store" });
       addLog(`Fetch OK status=${res.status}`);
       const text = await res.text();
-      addLog(`CSV recibido, largo=${text.length}`);
       const parsed = parseCSV(text);
       addLog(`Parseados ${parsed.length} activos`);
       setData(parsed);
@@ -252,66 +287,26 @@ export default function App() {
     return () => clearInterval(iv);
   }, []);
 
-  // Toggle helpers — igual que en debug
   const toggleArr = (arr, setArr, val) => {
     const next = arr.includes(val) ? arr.filter(x => x !== val) : [...arr, val];
-    addLog(`Toggle ${val} → [${next.join(",")}]`);
+    addLog(`Toggle "${val}" → [${next.join(",")}]`);
     setArr(next);
   };
-
-  const handleSearch = (val) => {
-    addLog(`Search → "${val}"`);
-    setSearch(val);
-  };
-
-  const handleSort = (field) => {
-    if (sortField === field) {
-      setSortDir(d => d === "asc" ? "desc" : "asc");
-    } else {
-      setSortField(field);
-      setSortDir("desc");
-    }
-    addLog(`Sort → ${field}`);
-  };
-
-  // Opciones dinámicas
-  const paisOptions  = useMemo(() => [...new Set(data.map(d => d.pais).filter(Boolean))].sort(), [data]);
-  const qCoOptions   = useMemo(() => [...new Set(data.map(d => d.qualityCo).filter(Boolean))].sort(), [data]);
-
-  const filtered = useMemo(() => {
-    const q = search.toLowerCase().trim();
-    const list = data.filter(item => {
-      if (q && !item.ticker.toLowerCase().includes(q) && !item.name.toLowerCase().includes(q) && !item.pais.toLowerCase().includes(q)) return false;
-      if (filterAccion.length && !filterAccion.includes(item.actionType)) return false;
-      if (filterPais.length   && !filterPais.includes(item.pais))         return false;
-      if (filterQCo.length    && !filterQCo.includes(item.qualityCo))     return false;
-      if (filterDivGro === "si" && !item.hasDivGro) return false;
-      if (filterDivGro === "no" &&  item.hasDivGro) return false;
-      return true;
-    });
-
-    return [...list].sort((a, b) => {
-      let va = a[sortField] ?? "";
-      let vb = b[sortField] ?? "";
-      if (typeof va === "string") va = va.toLowerCase();
-      if (typeof vb === "string") vb = vb.toLowerCase();
-      if (va < vb) return sortDir === "asc" ? -1 : 1;
-      if (va > vb) return sortDir === "asc" ? 1 : -1;
-      return 0;
-    });
-  }, [data, search, filterAccion, filterPais, filterQCo, filterDivGro, sortField, sortDir]);
-
-  const stats = useMemo(() => ({
-    buy:        data.filter(i => i.actionType === "BUY").length,
-    sellStrong: data.filter(i => i.actionType === "SELL_STRONG").length,
-    sellSoft:   data.filter(i => i.actionType === "SELL_SOFT").length,
-    neutral:    data.filter(i => i.actionType === "NEUTRAL").length,
-  }), [data]);
 
   const clearAll = () => {
     setSearch(""); setFilterAccion([]); setFilterPais([]);
     setFilterQCo([]); setFilterDivGro(null);
     addLog("Filtros limpiados");
+  };
+
+  const handleSort = (field) => {
+    if (sortField === field) {
+      setSortDir(d => { const nd = d === "asc" ? "desc" : "asc"; addLog(`Sort dir → ${nd}`); return nd; });
+    } else {
+      addLog(`Sort field → ${field}`);
+      setSortField(field);
+      setSortDir("desc");
+    }
   };
 
   const totalActive = filterAccion.length + filterPais.length + filterQCo.length + (filterDivGro ? 1 : 0) + (search ? 1 : 0);
@@ -336,22 +331,28 @@ export default function App() {
         <div>
           <div style={{ fontFamily: "'Space Grotesk',sans-serif", fontSize: 24, fontWeight: 800, letterSpacing: "-0.04em" }}>
             <span style={{ color: "#10b981" }}>CEDEAR</span><span style={{ color: "#e2e8f0" }}>PRO</span>
-            <span style={{ fontSize: 10, color: "#334155", marginLeft: 10 }}>v4.1</span>
+            <span style={{ fontSize: 10, color: "#334155", marginLeft: 10 }}>v5.0</span>
           </div>
           <div style={{ color: "#475569", fontSize: 10, marginTop: 3, display: "flex", alignItems: "center", gap: 8 }}>
-            <span>{data.length} ACTIVOS</span>
-            {error   && <span style={{ color: "#ef4444" }}>⚠ SIN CONEXIÓN</span>}
+            <span>{data.length} ACTIVOS · MOSTRANDO {filtered.length}</span>
+            {error      && <span style={{ color: "#ef4444" }}>⚠ SIN CONEXIÓN</span>}
             {lastUpdate && <span style={{ color: "#334155" }}>🕐 {lastUpdate.toLocaleTimeString("es-AR")}</span>}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {/* Botón log */}
-          <button onClick={() => setShowLog(s => !s)}
-            style={{ background: showLog ? "#fbbf2422" : "#0f172a", border: `1px solid ${showLog ? "#fbbf24" : "#1e293b"}`, color: showLog ? "#fbbf24" : "#475569", borderRadius: 6, padding: "7px 12px", cursor: "pointer", fontSize: 10, fontFamily: "inherit", fontWeight: 700 }}>
+          <button onClick={() => setShowLog(s => !s)} style={{
+            background: showLog ? "#fbbf2422" : "#0f172a",
+            border: `1px solid ${showLog ? "#fbbf24" : "#1e293b"}`,
+            color: showLog ? "#fbbf24" : "#475569",
+            borderRadius: 6, padding: "7px 12px", cursor: "pointer",
+            fontSize: 10, fontFamily: "inherit", fontWeight: 700,
+          }}>
             LOG {showLog ? "▲" : "▼"}
           </button>
-          <button onClick={() => fetchData(true)}
-            style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 6, color: "#64748b", padding: "8px 11px", cursor: "pointer" }}>
+          <button onClick={() => fetchData(true)} style={{
+            background: "#0f172a", border: "1px solid #1e293b",
+            borderRadius: 6, color: "#64748b", padding: "8px 11px", cursor: "pointer",
+          }}>
             <span style={{ display: "inline-block" }} className={refreshing ? "spin" : ""}>↻</span>
           </button>
           {[
@@ -368,23 +369,18 @@ export default function App() {
         </div>
       </div>
 
-      {/* LOG PANEL */}
+      {/* LOG */}
       {showLog && (
         <div style={{ background: "#000", borderBottom: "1px solid #1e293b", padding: "10px 24px", maxHeight: 160, overflowY: "auto" }}>
-          <div style={{ fontSize: 9, color: "#334155", letterSpacing: "0.1em", marginBottom: 6 }}>
-            LOG — data:{data.length} filtered:{filtered.length} search:"{search}" accion:{JSON.stringify(filterAccion)} pais:{JSON.stringify(filterPais)} qco:{JSON.stringify(filterQCo)} divgro:{filterDivGro} sort:{sortField} {sortDir}
-          </div>
           {log.map((l, i) => <div key={i} style={{ fontSize: 10, color: "#4ade80", fontFamily: "monospace" }}>{l}</div>)}
         </div>
       )}
 
-      {/* BARRA FILTROS — botones directos, sin dropdown */}
+      {/* FILTROS */}
       <div style={{ padding: "10px 24px", borderBottom: "1px solid #0f172a", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-start" }}>
-
-        {/* Search */}
         <input
           value={search}
-          onChange={e => handleSearch(e.target.value)}
+          onChange={e => setSearch(e.target.value)}
           placeholder="🔍 Buscar ticker o nombre..."
           style={{
             background: "#0f172a", border: "1px solid #1e293b", borderRadius: 7,
@@ -393,8 +389,7 @@ export default function App() {
           }}
         />
 
-        {/* Acción */}
-        <FiltroSection titulo="Acción" color="#10b981">
+        <FiltroSection titulo="Acción">
           {[
             { v: "BUY",         l: "▲ Comprar",    c: "#10b981" },
             { v: "SELL_STRONG", l: "▼ Venta Total", c: "#ef4444" },
@@ -408,18 +403,16 @@ export default function App() {
           ))}
         </FiltroSection>
 
-        {/* País */}
-        <FiltroSection titulo="País" color="#60a5fa">
+        <FiltroSection titulo="País">
           {paisOptions.map(p => (
-            <FiltroBtn key={p} label={p || "(sin país)"} color="#60a5fa"
+            <FiltroBtn key={p} label={p} color="#60a5fa"
               active={filterPais.includes(p)}
               count={data.filter(d => d.pais === p).length}
               onClick={() => toggleArr(filterPais, setFilterPais, p)} />
           ))}
         </FiltroSection>
 
-        {/* Calidad Cía */}
-        <FiltroSection titulo="Calidad Cía" color="#a78bfa">
+        <FiltroSection titulo="Calidad Cía">
           {qCoOptions.map(q => (
             <FiltroBtn key={q} label={q} color="#a78bfa"
               active={filterQCo.includes(q)}
@@ -428,21 +421,23 @@ export default function App() {
           ))}
         </FiltroSection>
 
-        {/* DivGro */}
-        <FiltroSection titulo="DivGro" color="#34d399">
+        <FiltroSection titulo="DivGro">
           <FiltroBtn label="✓ Con DivGro" color="#34d399"
             active={filterDivGro === "si"}
             count={data.filter(d => d.hasDivGro).length}
-            onClick={() => { setFilterDivGro(filterDivGro === "si" ? null : "si"); addLog("DivGro → si"); }} />
+            onClick={() => setFilterDivGro(filterDivGro === "si" ? null : "si")} />
           <FiltroBtn label="✗ Sin DivGro" color="#94a3b8"
             active={filterDivGro === "no"}
             count={data.filter(d => !d.hasDivGro).length}
-            onClick={() => { setFilterDivGro(filterDivGro === "no" ? null : "no"); addLog("DivGro → no"); }} />
+            onClick={() => setFilterDivGro(filterDivGro === "no" ? null : "no")} />
         </FiltroSection>
 
         {totalActive > 0 && (
-          <button onClick={clearAll}
-            style={{ background: "#ef444422", border: "1px solid #ef444455", color: "#f87171", borderRadius: 6, padding: "7px 12px", cursor: "pointer", fontSize: 11, fontFamily: "inherit", fontWeight: 700 }}>
+          <button onClick={clearAll} style={{
+            background: "#ef444422", border: "1px solid #ef444455", color: "#f87171",
+            borderRadius: 6, padding: "7px 12px", cursor: "pointer",
+            fontSize: 11, fontFamily: "inherit", fontWeight: 700,
+          }}>
             ✕ Limpiar ({totalActive})
           </button>
         )}
@@ -454,14 +449,13 @@ export default function App() {
         {SORT_FIELDS.map(opt => {
           const isActive = sortField === opt.value;
           return (
-            <button key={opt.value} onClick={() => handleSort(opt.value)}
-              style={{
-                background: isActive ? "#3b82f622" : "#1e293b",
-                border: `1px solid ${isActive ? "#3b82f6" : "#334155"}`,
-                color: isActive ? "#93c5fd" : "#94a3b8",
-                borderRadius: 20, padding: "4px 12px", cursor: "pointer",
-                fontSize: 10, fontFamily: "inherit", letterSpacing: "0.06em",
-              }}>
+            <button key={opt.value} onClick={() => handleSort(opt.value)} style={{
+              background: isActive ? "#3b82f622" : "#1e293b",
+              border: `1px solid ${isActive ? "#3b82f6" : "#334155"}`,
+              color: isActive ? "#93c5fd" : "#94a3b8",
+              borderRadius: 20, padding: "4px 12px", cursor: "pointer",
+              fontSize: 10, fontFamily: "inherit", letterSpacing: "0.06em",
+            }}>
               {opt.label} {isActive ? (sortDir === "asc" ? "↑" : "↓") : ""}
             </button>
           );
@@ -481,17 +475,16 @@ export default function App() {
 
         {!loading && !error && (
           <>
-            <div style={{ marginBottom: 10, color: "#334155", fontSize: 10, letterSpacing: "0.1em" }}>
-              MOSTRANDO {filtered.length} DE {data.length} ACTIVOS
-            </div>
             <div className="grid-cards">
               {filtered.map(item => {
                 const cfg    = ACTION_CONFIG[item.actionType] || ACTION_CONFIG.UNKNOWN;
                 const qColor = qualityColor(item.qualityCo);
                 return (
-                  <div key={item.ticker} className="card"
-                    style={{ background: cfg.bg, border: `1px solid ${cfg.border}33`, borderLeft: `3px solid ${cfg.border}`, borderRadius: 11, padding: "15px 16px", boxShadow: `0 0 18px ${cfg.border}0d` }}>
-
+                  <div key={item.ticker} className="card" style={{
+                    background: cfg.bg, border: `1px solid ${cfg.border}33`,
+                    borderLeft: `3px solid ${cfg.border}`, borderRadius: 11,
+                    padding: "15px 16px", boxShadow: `0 0 18px ${cfg.border}0d`,
+                  }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
                       <div>
                         <div style={{ fontFamily: "'Space Grotesk',sans-serif", fontSize: 18, fontWeight: 800, letterSpacing: "-0.02em", color: "#f8fafc" }}>{item.ticker}</div>
@@ -522,7 +515,7 @@ export default function App() {
                 );
               })}
             </div>
-            {filtered.length === 0 && (
+            {filtered.length === 0 && !loading && (
               <div style={{ textAlign: "center", padding: "50px 0", color: "#1e293b", fontSize: 13 }}>
                 SIN RESULTADOS · PROBÁ AJUSTAR LOS FILTROS
               </div>
