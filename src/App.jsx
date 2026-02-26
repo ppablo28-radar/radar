@@ -27,21 +27,22 @@ const parseCSV = (text) => {
     const rawPais = get("pais");
     const pais = (!rawPais || rawPais === "No encontrado") ? "" : rawPais;
     const nivelCompra = get("nivel compra");
-    const nivelVenta  = get("nivel venta");
-    const ncUP = nivelCompra.toUpperCase();
-    const nvUP = nivelVenta.toUpperCase();
-    const hasNivel = (nvUP && nvUP !== "#N/A") || (ncUP && ncUP !== "#N/A" && ncUP !== "");
+    const ncVal = nivelCompra.toLowerCase().trim();
+    const hasNivel = ncVal !== "" && ncVal !== "#n/a";
+    // actionType basado en nivelCompra
     let actionType = "UNKNOWN";
     if (hasNivel) {
-      if (nvUP.includes("N3") || nvUP.includes("VENTA TOTAL")) actionType = "SELL_STRONG";
-      else if (nvUP.includes("N2") || nvUP.includes("N1") || nvUP.includes("POSIBLE")) actionType = "SELL_SOFT";
-      else if (ncUP.startsWith("NIVEL")) actionType = "BUY";
-      else actionType = "NEUTRAL";
+      if (ncVal === "v3")          actionType = "SELL_STRONG";
+      else if (ncVal === "v2")     actionType = "SELL_SOFT";
+      else if (ncVal === "v1")     actionType = "SELL_SOFT";
+      else if (ncVal === "precio justo") actionType = "NEUTRAL";
+      else if (ncVal.startsWith("c")) actionType = "BUY";
+      else                         actionType = "NEUTRAL";
     }
     const rawQCo = get("calidad empresa");
     const qualityCo = (!rawQCo || rawQCo === "No encontrado" || rawQCo === "#N/A") ? "" : rawQCo;
     results.push({
-      ticker, name: nombre, pais, actionType, hasNivel, nivelCompra, nivelVenta, qualityCo,
+      ticker, name: nombre, pais, actionType, hasNivel, nivelCompra, qualityCo,
       precioArs:   parseFloat(get("precio ars"))        || 0,
       precioUsd:   parseFloat(get("precio usd"))        || 0,
       yld:         parseFloat(get("yield"))             || 0,
@@ -76,30 +77,26 @@ const applyFilters = (data, search, filterAccion, filterPais, filterQCo, filterD
   });
 };
 
+// Escala de arriba (venta) a abajo (mejor compra)
 const SCALE = [
-  { label: "Venta Total",   color: "#ef4444", dimColor: "#2d0a0a" },
-  { label: "Vender Mitad",  color: "#f87171", dimColor: "#2d0a0a" },
-  { label: "Posible Venta", color: "#fca5a5", dimColor: "#2d0a0a" },
-  { label: "Esperar",       color: "#94a3b8", dimColor: "#1e293b" },
-  { label: "Nivel 1",       color: "#d1fae5", dimColor: "#052e16" },
-  { label: "Nivel 2",       color: "#a7f3d0", dimColor: "#052e16" },
-  { label: "Nivel 3",       color: "#6ee7b7", dimColor: "#052e16" },
-  { label: "Nivel 4",       color: "#34d399", dimColor: "#052e16" },
-  { label: "Nivel 5",       color: "#10b981", dimColor: "#052e16" },
-  { label: "Nivel 6",       color: "#059669", dimColor: "#052e16" },
-  { label: "Nivel 7",       color: "#047857", dimColor: "#052e16" },
-  { label: "Nivel 8",       color: "#065f46", dimColor: "#022c22" },
+  { key: "v3",           label: "Venta Total",    color: "#ef4444", dimColor: "#1a0404", zone: "sell" },
+  { key: "v2",           label: "Vender Mitad",   color: "#f97316", dimColor: "#1a0a02", zone: "sell" },
+  { key: "v1",           label: "Posible Venta",  color: "#fbbf24", dimColor: "#1a1202", zone: "sell" },
+  { key: "precio justo", label: "Precio Justo",   color: "#94a3b8", dimColor: "#0f172a", zone: "fair" },
+  { key: "c1",           label: "C1",             color: "#86efac", dimColor: "#052e16", zone: "buy"  },
+  { key: "c2",           label: "C2",             color: "#4ade80", dimColor: "#052e16", zone: "buy"  },
+  { key: "c3",           label: "C3",             color: "#22c55e", dimColor: "#052e16", zone: "buy"  },
+  { key: "c4",           label: "C4",             color: "#16a34a", dimColor: "#052e16", zone: "buy"  },
+  { key: "c5",           label: "C5",             color: "#15803d", dimColor: "#052e16", zone: "buy"  },
+  { key: "c6",           label: "C6",             color: "#166534", dimColor: "#052e16", zone: "buy"  },
+  { key: "c7",           label: "C7",             color: "#14532d", dimColor: "#022c22", zone: "buy"  },
+  { key: "c8",           label: "C8 Op. Única",   color: "#10b981", dimColor: "#022c22", zone: "buy"  },
 ];
 
-const parseActiveIndex = (nc, nv) => {
-  const v = (nv || "").toUpperCase();
-  const c = (nc || "").toUpperCase();
-  if (v.includes("N3") || v.includes("VENTA TOTAL")) return 0;
-  if (v.includes("N2")) return 1;
-  if (v.includes("N1") || v.includes("POSIBLE")) return 2;
-  const m = c.match(/NIVEL\s*(\d+)/);
-  if (m) { const n = parseInt(m[1]); if (n >= 1 && n <= 8) return 3 + n; }
-  return 3;
+const parseActiveIndex = (nivelCompra) => {
+  const val = (nivelCompra || "").toLowerCase().trim();
+  const idx = SCALE.findIndex(s => s.key === val);
+  return idx;
 };
 
 const ACTION_CONFIG = {
@@ -121,35 +118,47 @@ const qualityColor = (q) => {
 const fmt  = (v) => (!v || v <= 0) ? "—" : new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", minimumFractionDigits: 0 }).format(v);
 const fmtU = (v) => (!v || v <= 0) ? "—" : `$${v.toLocaleString("en-US", { minimumFractionDigits: 2 })}`;
 
-function LevelBar({ nivelCompra, nivelVenta, hasNivel }) {
+function LevelBar({ nivelCompra, hasNivel }) {
   if (!hasNivel) return <div style={{ fontSize: 10, color: "#334155", padding: "4px 0" }}>SIN DATOS DE NIVEL</div>;
-  const ai = parseActiveIndex(nivelCompra, nivelVenta);
-  const active = SCALE[ai];
+  const ai = parseActiveIndex(nivelCompra);
+  const active = ai >= 0 ? SCALE[ai] : null;
   return (
-    <div>
-      <div style={{ fontSize: 10, color: active.color, marginBottom: 6, fontWeight: 700, textTransform: "uppercase", display: "flex", alignItems: "center", gap: 5 }}>
-        <span style={{ width: 6, height: 6, borderRadius: "50%", background: active.color, display: "inline-block", boxShadow: `0 0 6px ${active.color}` }} />
-        {active.label}
-      </div>
-      <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+    <div style={{ display: "flex", gap: 8, alignItems: "stretch" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 2, alignItems: "center" }}>
+        <span style={{ fontSize: 7, color: "#ef444440", marginBottom: 1 }}>▲</span>
         {SCALE.map((step, idx) => {
           const isActive = idx === ai;
           return (
             <div key={idx} title={step.label} style={{
-              marginLeft: (idx === 3 || idx === 4) ? 8 : 0,
-              width: isActive ? 20 : 13, height: isActive ? 24 : 14,
-              borderRadius: isActive ? 5 : 3,
+              width: isActive ? 18 : 12,
+              height: isActive ? 18 : 10,
+              borderRadius: 3,
               background: isActive ? step.color : step.dimColor,
-              border: isActive ? `1.5px solid ${step.color}` : `1px solid ${step.color}30`,
-              boxShadow: isActive ? `0 0 10px ${step.color}cc` : "none",
+              border: isActive ? "1.5px solid " + step.color : "1px solid " + step.color + "25",
+              boxShadow: isActive ? "0 0 8px " + step.color + "bb, 0 0 16px " + step.color + "44" : "none",
+              transition: "all 0.2s",
               flexShrink: 0,
             }} />
           );
         })}
+        <span style={{ fontSize: 7, color: "#10b98140", marginTop: 1 }}>▼</span>
       </div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
-        <span style={{ fontSize: 8, color: "#ef444450" }}>◀ VENTA</span>
-        <span style={{ fontSize: 8, color: "#10b98150" }}>MEJOR COMPRA ▶</span>
+      <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", gap: 4, flex: 1 }}>
+        {active ? (
+          <>
+            <div style={{ fontSize: 11, fontWeight: 700, color: active.color, textTransform: "uppercase", letterSpacing: "0.08em", display: "flex", alignItems: "center", gap: 5 }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: active.color, display: "inline-block", boxShadow: "0 0 6px " + active.color }} />
+              {active.label}
+            </div>
+            <div style={{ fontSize: 9, color: "#334155", letterSpacing: "0.06em" }}>
+              {active.zone === "sell" && "ZONA DE VENTA"}
+              {active.zone === "fair" && "PRECIO JUSTO"}
+              {active.zone === "buy"  && "ZONA DE COMPRA"}
+            </div>
+          </>
+        ) : (
+          <div style={{ fontSize: 10, color: "#334155" }}>SIN DATOS</div>
+        )}
       </div>
     </div>
   );
@@ -499,7 +508,7 @@ export default function App() {
                     </div>
 
                     <div style={{ background: "#00000033", borderRadius: 7, padding: "8px 10px", marginBottom: 10 }}>
-                      <LevelBar nivelCompra={item.nivelCompra} nivelVenta={item.nivelVenta} hasNivel={item.hasNivel} />
+                      <LevelBar nivelCompra={item.nivelCompra} hasNivel={item.hasNivel} />
                     </div>
 
                     <div style={{ height: 1, background: "#ffffff0d", marginBottom: 9 }} />
